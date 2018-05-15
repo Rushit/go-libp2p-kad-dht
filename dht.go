@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	opts "github.com/libp2p/go-libp2p-kad-dht/opts"
 	pb "github.com/libp2p/go-libp2p-kad-dht/pb"
 	providers "github.com/libp2p/go-libp2p-kad-dht/providers"
-	routing "github.com/libp2p/go-libp2p-routing"
 
 	proto "github.com/gogo/protobuf/proto"
 	cid "github.com/ipfs/go-cid"
@@ -28,6 +28,7 @@ import (
 	protocol "github.com/libp2p/go-libp2p-protocol"
 	record "github.com/libp2p/go-libp2p-record"
 	recpb "github.com/libp2p/go-libp2p-record/pb"
+	routing "github.com/libp2p/go-libp2p-routing"
 	base32 "github.com/whyrusleeping/base32"
 )
 
@@ -65,19 +66,13 @@ type IpfsDHT struct {
 	plk sync.Mutex
 }
 
-// NewDHT creates a new DHT object with the given peer as the 'local' host
-func NewDHT(ctx context.Context, h host.Host, dstore ds.Batching, validator record.Validator) *IpfsDHT {
-	dht := NewDHTClient(ctx, h, dstore, validator)
-
-	h.SetStreamHandler(ProtocolDHT, dht.handleNewStream)
-	h.SetStreamHandler(ProtocolDHTOld, dht.handleNewStream)
-
-	return dht
-}
-
-// NewDHTClient creates a new DHT object with the given peer as the 'local' host
-func NewDHTClient(ctx context.Context, h host.Host, dstore ds.Batching, validator record.Validator) *IpfsDHT {
-	dht := makeDHT(ctx, h, dstore)
+// New creates a new DHT with the specified host and options.
+func New(ctx context.Context, h host.Host, options ...opts.Option) (*IpfsDHT, error) {
+	var cfg opts.Options
+	if err := cfg.Apply(append([]opts.Option{opts.Defaults}, options...)...); err != nil {
+		return nil, err
+	}
+	dht := makeDHT(ctx, h, cfg.Datastore)
 
 	// register for network notifs.
 	dht.host.Network().Notify((*netNotifiee)(dht))
@@ -89,8 +84,32 @@ func NewDHTClient(ctx context.Context, h host.Host, dstore ds.Batching, validato
 	})
 
 	dht.proc.AddChild(dht.providers.Process())
-	dht.Validator = validator
+	dht.Validator = cfg.Validator
 
+	if !cfg.Client {
+		h.SetStreamHandler(ProtocolDHT, dht.handleNewStream)
+		h.SetStreamHandler(ProtocolDHTOld, dht.handleNewStream)
+	}
+	return dht, nil
+}
+
+// NewDHT creates a new DHT with the given host and datastore. This constructor
+// is deprecated in favor of New.
+func NewDHT(ctx context.Context, h host.Host, dstore ds.Batching) *IpfsDHT {
+	dht, err := New(ctx, h, opts.Datastore(dstore))
+	if err != nil {
+		panic(err)
+	}
+	return dht
+}
+
+// NewDHTClient creates a new DHT operating in client-only mode with the given
+// host and datastore. This constructor is deprecated in favor of New.
+func NewDHTClient(ctx context.Context, h host.Host, dstore ds.Batching) *IpfsDHT {
+	dht, err := New(ctx, h, opts.Datastore(dstore), opts.Client(true))
+	if err != nil {
+		panic(err)
+	}
 	return dht
 }
 
